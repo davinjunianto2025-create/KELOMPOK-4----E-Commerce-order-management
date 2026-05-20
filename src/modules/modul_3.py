@@ -25,11 +25,9 @@ Big-O Ringkasan:
 
 import time
 import random
-import numpy as np
 from typing import Optional
 
 random.seed(99)
-np.random.seed(99)
 
 
 # ──────────────────────────────────────────────────────────────
