@@ -14,22 +14,13 @@ Deskripsi:
     terdekat (hop <= 2)
   - Semua struktur data (Queue, Graph) diimplementasi DARI NOL,
     tanpa menggunakan collections.deque atau library sejenis
-
-Big-O Ringkasan:
-  add_copurchase  : O(deg(u))  -- cek duplikat di adjacency list
-  rekomendasikan  : O(V + E)   -- BFS standar
-  get_neighbors   : O(deg(u))
-  tampilkan_graph : O(V + E)
-=============================================================
 """
 
 import time
 import random
-import numpy as np
 from typing import Optional
 
 random.seed(99)
-np.random.seed(99)
 
 
 # ──────────────────────────────────────────────────────────────
