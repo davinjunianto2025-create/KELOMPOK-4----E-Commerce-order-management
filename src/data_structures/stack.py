@@ -1,194 +1,175 @@
 """
-BST Katalog Produk - E-Commerce Order Management & Recommendation Engine
+Stack Riwayat Transaksi - E-Commerce Order Management & Recommendation Engine
 Topik 3 | Domain: Platform Belanja Online
 
-Struktur Data: Binary Search Tree (BST)
-Key: kode_produk (P001 - P100)
-Setiap node menyimpan: kode, nama, harga, stok
+Struktur Data: Stack (berbasis Linked List)
+Per-pelanggan: menyimpan maks 10 order terakhir
 
 Operasi:
-  - insert        : tambah produk baru         -> O(log n) avg
-  - search        : cari produk by kode        -> O(log n) avg
-  - update_stok   : perbarui stok produk       -> O(log n) avg
-  - inorder       : katalog urut by kode       -> O(n)
-  - delete        : hapus produk (discontinued) -> O(log n) avg
+  - push (catat order)    -> O(1)
+  - pop  (undo order)     -> O(1)
+  - peek / riwayat        -> O(1) / O(n)
+
+CLI:
+  RIWAYAT   <pelanggan>            -> tampilkan 10 order terakhir
+  UNDO_ORDER <pelanggan>           -> batalkan order terakhir
 """
 
+from __future__ import annotations
+from dataclasses import dataclass, field
+from datetime import datetime
 
-class ProductNode:
-    """Node BST yang merepresentasikan satu produk."""
 
-    def __init__(self, kode: str, nama: str, harga: float, stok: int):
-        self.kode  = kode          # primary key
-        self.nama  = nama
-        self.harga = harga
-        self.stok  = stok
-        self.left  = None
-        self.right = None
+# ======================================================================
+# NODE & ORDER RECORD
+# ======================================================================
 
-    def __repr__(self) -> str:
+@dataclass
+class OrderRecord:
+    """Satu record transaksi yang disimpan dalam stack."""
+    order_id   : str
+    kode_produk: str
+    qty        : int
+    tier       : str          # PREMIUM | REGULAR | ECONOMY
+    total_harga: float
+    waktu      : str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    status     : str = "AKTIF"   # AKTIF | DIBATALKAN
+
+    def __str__(self) -> str:
         return (
-            f"[{self.kode}] {self.nama} | "
-            f"Harga: Rp{self.harga:,.0f} | Stok: {self.stok}"
+            f"  [{self.waktu}] {self.order_id} | "
+            f"Produk: {self.kode_produk} x{self.qty} | "
+            f"Tier: {self.tier} | "
+            f"Total: Rp{self.total_harga:,.0f} | "
+            f"Status: {self.status}"
         )
 
 
-class BSTKatalogProduk:
+class _StackNode:
+    """Node internal linked-list untuk stack."""
+
+    def __init__(self, data: OrderRecord):
+        self.data: OrderRecord = data
+        self.next: _StackNode | None = None
+
+
+# ======================================================================
+# STACK PER PELANGGAN
+# ======================================================================
+
+class TransactionStack:
     """
-    Binary Search Tree untuk katalog produk e-commerce.
-    Urutan berdasarkan kode_produk (string lexicographic).
+    Stack riwayat transaksi untuk SATU pelanggan.
+    Kapasitas maksimum: MAX_SIZE order (default 10).
+    Implementasi menggunakan Singly Linked List (top di head).
     """
 
-    def __init__(self):
-        self._root = None
-        self._size = 0
+    MAX_SIZE = 10
+
+    def __init__(self, kode_pelanggan: str):
+        self.kode_pelanggan = kode_pelanggan
+        self._top: _StackNode | None = None
+        self._size: int = 0
 
     # ------------------------------------------------------------------
-    # INSERT  ->  O(log n) average, O(n) worst
+    # PUSH  ->  O(1)
     # ------------------------------------------------------------------
-    def insert(self, kode: str, nama: str, harga: float, stok: int) -> bool:
+    def push(self, order: OrderRecord) -> bool:
         """
-        Tambahkan produk baru ke katalog.
-        Return True jika berhasil, False jika kode sudah ada.
-        """
-        new_node = ProductNode(kode, nama, harga, stok)
-        if self._root is None:
-            self._root = new_node
-            self._size += 1
-            return True
-
-        current = self._root
-        while True:
-            if kode == current.kode:
-                print(f"[BST] Produk '{kode}' sudah ada di katalog.")
-                return False
-            elif kode < current.kode:
-                if current.left is None:
-                    current.left = new_node
-                    self._size += 1
-                    return True
-                current = current.left
-            else:
-                if current.right is None:
-                    current.right = new_node
-                    self._size += 1
-                    return True
-                current = current.right
-
-    # ------------------------------------------------------------------
-    # SEARCH  ->  O(log n) average
-    # ------------------------------------------------------------------
-    def search(self, kode: str) -> ProductNode | None:
-        """Cari dan kembalikan node produk berdasarkan kode. None jika tidak ada."""
-        current = self._root
-        while current:
-            if kode == current.kode:
-                return current
-            elif kode < current.kode:
-                current = current.left
-            else:
-                current = current.right
-        return None
-
-    # ------------------------------------------------------------------
-    # UPDATE STOK  ->  O(log n) average
-    # ------------------------------------------------------------------
-    def update_stok(self, kode: str, delta: int) -> bool:
-        """
-        Update stok produk.
-        delta positif  -> tambah stok
-        delta negatif  -> kurangi stok (tidak boleh < 0)
+        Tambahkan order ke atas stack.
+        Jika sudah penuh (10 order), order terlama dibuang (FIFO eviction).
         Return True jika berhasil.
         """
-        node = self.search(kode)
-        if node is None:
-            print(f"[BST] Produk '{kode}' tidak ditemukan.")
-            return False
-        new_stok = node.stok + delta
-        if new_stok < 0:
-            print(f"[BST] Stok tidak cukup. Stok saat ini: {node.stok}")
-            return False
-        node.stok = new_stok
+        if self._size == self.MAX_SIZE:
+            # Buang elemen terbawah (terlama)
+            self._remove_bottom()
+
+        new_node = _StackNode(order)
+        new_node.next = self._top
+        self._top = new_node
+        self._size += 1
         return True
 
+    def _remove_bottom(self):
+        """Hapus node paling bawah stack (order terlama). O(n)."""
+        if self._top is None:
+            return
+        if self._top.next is None:
+            self._top = None
+            self._size -= 1
+            return
+        current = self._top
+        while current.next.next:
+            current = current.next
+        current.next = None
+        self._size -= 1
+
     # ------------------------------------------------------------------
-    # INORDER (katalog terurut)  ->  O(n)
+    # POP / UNDO  ->  O(1)
     # ------------------------------------------------------------------
-    def inorder(self) -> list[ProductNode]:
-        """Kembalikan daftar produk terurut ascending by kode_produk."""
-        result: list[ProductNode] = []
-        self._inorder_recursive(self._root, result)
+    def pop(self) -> OrderRecord | None:
+        """
+        Ambil (hapus) order teratas dari stack.
+        Return OrderRecord jika ada, None jika kosong.
+        """
+        if self._top is None:
+            return None
+        data = self._top.data
+        self._top = self._top.next
+        self._size -= 1
+        return data
+
+    def undo_order(self) -> OrderRecord | None:
+        """
+        Batalkan order terakhir pelanggan.
+        Menandai status = 'DIBATALKAN' dan mengembalikan record-nya.
+        """
+        order = self.pop()
+        if order is None:
+            print(f"[STACK] Tidak ada riwayat order untuk pelanggan {self.kode_pelanggan}.")
+            return None
+        order.status = "DIBATALKAN"
+        print(f"[STACK] Order dibatalkan: {order.order_id} ({order.kode_produk})")
+        return order
+
+    # ------------------------------------------------------------------
+    # PEEK  ->  O(1)
+    # ------------------------------------------------------------------
+    def peek(self) -> OrderRecord | None:
+        """Lihat order teratas tanpa menghapusnya."""
+        return self._top.data if self._top else None
+
+    # ------------------------------------------------------------------
+    # RIWAYAT  ->  O(n)
+    # ------------------------------------------------------------------
+    def riwayat(self, n: int = MAX_SIZE) -> list[OrderRecord]:
+        """
+        Kembalikan daftar n order terakhir (dari teratas ke terbawah).
+        Default n = 10.
+        """
+        result = []
+        current = self._top
+        count = 0
+        while current and count < n:
+            result.append(current.data)
+            current = current.next
+            count += 1
         return result
 
-    def _inorder_recursive(self, node: ProductNode | None, result: list):
-        if node is None:
-            return
-        self._inorder_recursive(node.left, result)
-        result.append(node)
-        self._inorder_recursive(node.right, result)
-
-    def print_katalog(self):
-        """Tampilkan seluruh katalog terurut by kode."""
-        items = self.inorder()
-        if not items:
-            print("[BST] Katalog kosong.")
-            return
-        print(f"\n{'='*55}")
-        print(f"{'KATALOG PRODUK':^55}")
-        print(f"{'='*55}")
-        for item in items:
-            print(f"  {item}")
-        print(f"{'='*55}")
-        print(f"  Total produk: {self._size}")
-
-    # ------------------------------------------------------------------
-    # DELETE  ->  O(log n) average
-    # ------------------------------------------------------------------
-    def delete(self, kode: str) -> bool:
-        """
-        Hapus produk dari katalog (discontinued).
-        Return True jika berhasil.
-        """
-        self._root, deleted = self._delete_recursive(self._root, kode)
-        if deleted:
-            self._size -= 1
+    def print_riwayat(self):
+        """Tampilkan riwayat transaksi pelanggan ke stdout."""
+        orders = self.riwayat()
+        header = f"RIWAYAT TRANSAKSI - Pelanggan {self.kode_pelanggan}"
+        print(f"\n{'='*65}")
+        print(f"{header:^65}")
+        print(f"{'='*65}")
+        if not orders:
+            print("  (Belum ada transaksi)")
         else:
-            print(f"[BST] Produk '{kode}' tidak ditemukan.")
-        return deleted
-
-    def _delete_recursive(
-        self, node: ProductNode | None, kode: str
-    ) -> tuple[ProductNode | None, bool]:
-        if node is None:
-            return None, False
-
-        deleted = False
-        if kode < node.kode:
-            node.left, deleted = self._delete_recursive(node.left, kode)
-        elif kode > node.kode:
-            node.right, deleted = self._delete_recursive(node.right, kode)
-        else:
-            # Node ditemukan — 3 kasus
-            deleted = True
-            if node.left is None:
-                return node.right, deleted
-            elif node.right is None:
-                return node.left, deleted
-            else:
-                # Ganti dengan in-order successor (node terkecil di subtree kanan)
-                successor = self._find_min(node.right)
-                node.kode  = successor.kode
-                node.nama  = successor.nama
-                node.harga = successor.harga
-                node.stok  = successor.stok
-                node.right, _ = self._delete_recursive(node.right, successor.kode)
-
-        return node, deleted
-
-    def _find_min(self, node: ProductNode) -> ProductNode:
-        while node.left:
-            node = node.left
-        return node
+            for i, order in enumerate(orders, 1):
+                print(f"  {i:>2}. {order}")
+        print(f"{'='*65}")
+        print(f"  Total order tercatat: {self._size} / {self.MAX_SIZE}")
 
     # ------------------------------------------------------------------
     # UTILITY
@@ -201,37 +182,98 @@ class BSTKatalogProduk:
 
 
 # ======================================================================
+# MANAGER — mengelola stack untuk SEMUA pelanggan (C001–C050)
+# ======================================================================
+
+class TransactionStackManager:
+    """
+    Manager yang menyimpan TransactionStack per pelanggan.
+    Diakses via kode_pelanggan (C001–C050).
+    """
+
+    def __init__(self):
+        self._stacks: dict[str, TransactionStack] = {}
+
+    def _get_or_create(self, kode_pelanggan: str) -> TransactionStack:
+        if kode_pelanggan not in self._stacks:
+            self._stacks[kode_pelanggan] = TransactionStack(kode_pelanggan)
+        return self._stacks[kode_pelanggan]
+
+    # CLI: ORDER <cust> <prod> <tier> <qty>
+    def catat_order(
+        self,
+        kode_pelanggan: str,
+        kode_produk   : str,
+        qty           : int,
+        tier          : str,
+        harga_satuan  : float,
+        order_id      : str | None = None,
+    ) -> OrderRecord:
+        """Catat order baru ke stack pelanggan."""
+        if order_id is None:
+            ts = datetime.now().strftime("%Y%m%d%H%M%S")
+            order_id = f"ORD-{kode_pelanggan}-{ts}"
+
+        record = OrderRecord(
+            order_id    = order_id,
+            kode_produk = kode_produk,
+            qty         = qty,
+            tier        = tier.upper(),
+            total_harga = harga_satuan * qty,
+        )
+        stack = self._get_or_create(kode_pelanggan)
+        stack.push(record)
+        print(f"[STACK] Order dicatat: {record.order_id} untuk {kode_pelanggan}")
+        return record
+
+    # CLI: UNDO_ORDER <cust>
+    def undo_order(self, kode_pelanggan: str) -> OrderRecord | None:
+        """Batalkan order terakhir pelanggan."""
+        stack = self._get_or_create(kode_pelanggan)
+        return stack.undo_order()
+
+    # CLI: RIWAYAT <cust>
+    def tampilkan_riwayat(self, kode_pelanggan: str):
+        """Tampilkan riwayat transaksi pelanggan."""
+        stack = self._get_or_create(kode_pelanggan)
+        stack.print_riwayat()
+
+    def get_stack(self, kode_pelanggan: str) -> TransactionStack:
+        return self._get_or_create(kode_pelanggan)
+
+
+# ======================================================================
 # DEMO / QUICK TEST
 # ======================================================================
 if __name__ == "__main__":
-    katalog = BSTKatalogProduk()
+    manager = TransactionStackManager()
 
-    # Seed data produk
-    produk_data = [
-        ("P050", "Laptop Gaming",     15_000_000, 10),
-        ("P010", "Mouse Wireless",       250_000, 50),
-        ("P075", "Monitor 27 inch",    4_500_000, 8),
-        ("P001", "Keyboard Mekanikal",   850_000, 30),
-        ("P090", "Headset Bluetooth",    600_000, 20),
-        ("P030", "Webcam HD",            450_000, 15),
+    PELANGGAN = "C007"
+
+    # Simulasi beberapa order
+    orders_data = [
+        ("P010", 2, "REGULAR",  250_000),
+        ("P050", 1, "PREMIUM",  15_000_000),
+        ("P001", 3, "ECONOMY",  850_000),
+        ("P030", 1, "REGULAR",  450_000),
+        ("P090", 2, "PREMIUM",  600_000),
     ]
-    for kode, nama, harga, stok in produk_data:
-        katalog.insert(kode, nama, harga, stok)
+    for kode_prod, qty, tier, harga in orders_data:
+        manager.catat_order(PELANGGAN, kode_prod, qty, tier, harga)
 
-    # Tampilkan katalog inorder
-    katalog.print_katalog()
+    # Tampilkan riwayat
+    manager.tampilkan_riwayat(PELANGGAN)
 
-    # Search
-    print("\n[SEARCH P030]")
-    node = katalog.search("P030")
-    print(f"  Ditemukan: {node}" if node else "  Tidak ditemukan.")
+    # Undo order terakhir
+    print("\n[UNDO ORDER TERAKHIR]")
+    manager.undo_order(PELANGGAN)
 
-    # Update stok
-    print("\n[UPDATE STOK P010 -5]")
-    katalog.update_stok("P010", -5)
-    print(f"  Stok baru P010: {katalog.search('P010').stok}")
+    # Tampilkan riwayat setelah undo
+    manager.tampilkan_riwayat(PELANGGAN)
 
-    # Delete
-    print("\n[DELETE P075]")
-    katalog.delete("P075")
-    katalog.print_katalog()
+    # Test batas kapasitas: tambah lebih dari 10 order
+    print("\n[TEST BATAS KAPASITAS — tambah 7 order lagi]")
+    for i in range(7):
+        manager.catat_order(PELANGGAN, f"P{i+20:03d}", 1, "ECONOMY", 100_000 * (i + 1))
+
+    manager.tampilkan_riwayat(PELANGGAN)
