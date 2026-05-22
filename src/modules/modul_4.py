@@ -1,4 +1,3 @@
-from typing import Optional
 
 # Disediakan dari starter code (Halaman 12) 
 class LLNode:
@@ -50,5 +49,5 @@ class Stack:
         while current is not None:
             daftar_riwayat.append(current.data)
             current = current.next
-        return daftar_riwayat
-
+        return dafta
+      main
