@@ -1,598 +1,504 @@
 """
-modul_6.py - CLI E-Commerce
-E-Commerce Order Management & Recommendation Engine
-Topik 3 | src/modules/modul_6.py
-
-Perintah yang didukung:
-  ORDER <cust> <prod> <tier>    -> tambah order ke antrian       O(1)
-  SERVE                         -> layani order tertinggi         O(1)
-  CANCEL_LAST                   -> batalkan order terakhir (Stack) O(1)
-  CARI_PRODUK <kode>            -> cari produk di BST             O(log n)
-  UPDATE_STOK <kode> <qty>      -> update stok produk             O(log n)
-  REKOMENDASI <kode_produk>     -> rekomendasi via BFS Graph      O(V+E)
-  RIWAYAT <cust>                -> riwayat 10 transaksi terakhir  O(n)
-  LAPORAN_HARIAN                -> laporan + sorting              O(n²)
-  KELUAR                        -> keluar CLI
+ELT60213 – Algoritma dan Struktur Data
+Topik 3: E-Commerce Order Management & Recommendation Engine
+Kelompok 4 | TA 2025/2026 | seed = 99
 """
 
-import sys
-import os
-import random
-from datetime import datetime
+import time, random
+import numpy as np
+from typing import Optional, List, Dict, Tuple
 
-# ── Path setup ────────────────────────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SRC_DIR  = os.path.join(BASE_DIR, "..")
-sys.path.insert(0, SRC_DIR)
+np.random.seed(99)
+random.seed(99)
 
-# ── Try import modul project ──────────────────────────────────────────
-try:
-    from data_structures.bst   import BSTKatalogProduk
-    from data_structures.stack import TransactionStackManager, OrderRecord
-    BST_EXT   = True
-    STACK_EXT = True
-except ImportError:
-    BST_EXT   = False
-    STACK_EXT = False
-
-try:
-    from data_structures.queue_ll  import MultiPriorityQueue
-    QUEUE_EXT = True
-except ImportError:
-    QUEUE_EXT = False
-
-try:
-    from data_structures.graph import GraphRekomendasi
-    GRAPH_EXT = True
-except ImportError:
-    GRAPH_EXT = False
-
-try:
-    from data_structures.linked_list import LinkedListLaporan
-    LL_EXT = True
-except ImportError:
-    LL_EXT = False
-
-
-# ======================================================================
-# INLINE FALLBACK — struktur data minimal jika modul belum tersedia
-# ======================================================================
-
-# ── BST Inline ────────────────────────────────────────────────────────
-class _BSTNode:
+# ──────────────────────────────────────────
+# DATACLASS
+# ──────────────────────────────────────────
+class Produk:
     def __init__(self, kode, nama, harga, stok):
-        self.kode  = kode
-        self.nama  = nama
-        self.harga = harga
-        self.stok  = stok
-        self.left  = self.right = None
-    def __str__(self):
-        return f"[{self.kode}] {self.nama} | Rp{self.harga:,.0f} | Stok: {self.stok}"
+        self.kode = kode; self.nama = nama
+        self.harga = harga; self.stok = stok
 
-class _BST:
-    def __init__(self): self.root = None; self.size = 0
-    def insert(self, kode, nama, harga, stok):
-        n = _BSTNode(kode, nama, harga, stok)
-        if not self.root: self.root = n; self.size += 1; return
-        c = self.root
-        while True:
-            if kode == c.kode: return
-            if kode < c.kode:
-                if not c.left:  c.left  = n; self.size += 1; return
-                c = c.left
-            else:
-                if not c.right: c.right = n; self.size += 1; return
-                c = c.right
-    def search(self, kode):
-        c = self.root
-        while c:
-            if kode == c.kode: return c
-            c = c.left if kode < c.kode else c.right
-        return None
-    def update_stok(self, kode, delta):
-        n = self.search(kode)
-        if not n: return False
-        if n.stok + delta < 0: return False
-        n.stok += delta; return True
-    def inorder(self):
-        res = []
-        def _in(node):
-            if not node: return
-            _in(node.left); res.append(node); _in(node.right)
-        _in(self.root); return res
+class Order:
+    def __init__(self, order_id, pelanggan, produk_kode, tier, qty, total_harga, waktu_pesan):
+        self.order_id = order_id; self.pelanggan = pelanggan
+        self.produk_kode = produk_kode; self.tier = tier
+        self.qty = qty; self.total_harga = total_harga
+        self.waktu_pesan = waktu_pesan
 
-# ── Queue Inline ──────────────────────────────────────────────────────
-class _Queue:
-    TIERS = ["PREMIUM", "REGULAR", "ECONOMY"]
+# ──────────────────────────────────────────
+# NODE LINKED LIST
+# ──────────────────────────────────────────
+class LLNode:
+    def __init__(self, data=None):
+        self.data = data
+        self.next = None
+
+# ──────────────────────────────────────────
+# QUEUE berbasis Linked List
+# ──────────────────────────────────────────
+class Queue:
     def __init__(self):
-        self._q   = {t: [] for t in self.TIERS}
-        self._log = []          # semua order masuk (untuk laporan)
-    def enqueue(self, cust, prod, tier):
-        tier = tier.upper()
-        if tier not in self.TIERS: tier = "ECONOMY"
-        item = {"cust": cust, "prod": prod, "tier": tier,
-                "waktu": datetime.now().strftime("%H:%M:%S"),
-                "id": f"ORD-{cust}-{prod}-{datetime.now().strftime('%H%M%S')}"}
-        self._q[tier].append(item)
-        self._log.append(item)
-        return item
+        self.head = self.tail = None
+        self._size = 0
+
+    def enqueue(self, data):
+        node = LLNode(data)
+        if self.tail:
+            self.tail.next = node
+        else:
+            self.head = node
+        self.tail = node
+        self._size += 1
+
     def dequeue(self):
-        for t in self.TIERS:
-            if self._q[t]: return self._q[t].pop(0)
-        return None
-    def cancel_last(self):
-        for t in self.TIERS:
-            if self._q[t]: return self._q[t].pop()
-        return None
-    def laporan(self): return list(self._log)
-    def total(self): return sum(len(v) for v in self._q.values())
+        if self.is_empty(): return None
+        data = self.head.data
+        self.head = self.head.next
+        if not self.head: self.tail = None
+        self._size -= 1
+        return data
 
-# ── Stack Inline ──────────────────────────────────────────────────────
-class _StackMgr:
-    def __init__(self):
-        self._stacks = {}
-    def _get(self, cust):
-        if cust not in self._stacks:
-            self._stacks[cust] = []
-        return self._stacks[cust]
-    def push(self, cust, order):
-        s = self._get(cust)
-        if len(s) >= 10: s.pop(0)
-        s.append(order)
-    def pop(self, cust):
-        s = self._get(cust)
-        return s.pop() if s else None
-    def riwayat(self, cust): return list(reversed(self._get(cust)))
+    def is_empty(self): return self._size == 0
+    def __len__(self): return self._size
 
-# ── Graph BFS Inline ─────────────────────────────────────────────────
-class _Graph:
-    def __init__(self):
-        self._adj = {}
-    def add_edge(self, u, v, w=1):
-        self._adj.setdefault(u, {})[v] = w
-        self._adj.setdefault(v, {})[u] = w
-    def bfs_recommend(self, start, max_hop=2):
-        if start not in self._adj: return []
-        visited = {start}
-        queue   = [(start, 0)]
-        result  = []
-        while queue:
-            node, hop = queue.pop(0)
-            if hop > max_hop: continue
-            for nbr, w in self._adj.get(node, {}).items():
-                if nbr not in visited:
-                    visited.add(nbr)
-                    result.append((nbr, w, hop + 1))
-                    queue.append((nbr, hop + 1))
-        result.sort(key=lambda x: (-x[1], x[2]))
-        return result
-
-# ── Sorting (Linked List node) ────────────────────────────────────────
-class _LLNode:
-    def __init__(self, data): self.data = data; self.next = None
-
-class _LL:
-    def __init__(self): self.head = None; self._size = 0
-    def append(self, data):
-        n = _LLNode(data)
-        if not self.head: self.head = n; self._size += 1; return
-        c = self.head
-        while c.next: c = c.next
-        c.next = n; self._size += 1
     def to_list(self):
         r, c = [], self.head
         while c: r.append(c.data); c = c.next
         return r
-    def from_list(self, lst):
-        self.head = None; self._size = 0
-        for item in lst: self.append(item)
-    def bubble_sort_harga(self):
-        if not self.head: return
+
+# ──────────────────────────────────────────
+# STACK berbasis Linked List
+# ──────────────────────────────────────────
+class Stack:
+    def __init__(self, kapasitas=10):
+        self.top = None
+        self._size = 0
+        self.kapasitas = kapasitas
+
+    def push(self, data):
+        if self._size >= self.kapasitas:
+            items = self.to_list()[:-1]  # buang terlama
+            self.top = None; self._size = 0
+            for item in reversed(items):
+                node = LLNode(item); node.next = self.top
+                self.top = node; self._size += 1
+        node = LLNode(data); node.next = self.top
+        self.top = node; self._size += 1
+
+    def pop(self):
+        if self.is_empty(): return None
+        data = self.top.data; self.top = self.top.next
+        self._size -= 1; return data
+
+    def is_empty(self): return self._size == 0
+    def __len__(self): return self._size
+
+    def to_list(self):
+        r, c = [], self.top
+        while c: r.append(c.data); c = c.next
+        return r
+
+# ──────────────────────────────────────────
+# BST KATALOG PRODUK
+# ──────────────────────────────────────────
+class BSTNode:
+    def __init__(self, produk):
+        self.produk = produk
+        self.left = self.right = None
+
+class BSTKatalog:
+    def __init__(self): self.root = None
+
+    def insert(self, produk):
+        self.root = self._ins(self.root, produk)
+
+    def _ins(self, node, produk):
+        if node is None: return BSTNode(produk)
+        if produk.kode < node.produk.kode:
+            node.left = self._ins(node.left, produk)
+        elif produk.kode > node.produk.kode:
+            node.right = self._ins(node.right, produk)
+        return node
+
+    def search(self, kode):
+        node = self._srch(self.root, kode)
+        return node.produk if node else None
+
+    def _srch(self, node, kode):
+        if node is None or node.produk.kode == kode: return node
+        return self._srch(node.left, kode) if kode < node.produk.kode \
+               else self._srch(node.right, kode)
+
+    def update_stok(self, kode, delta):
+        node = self._srch(self.root, kode)
+        if node: node.produk.stok += delta; return True
+        return False
+
+    def inorder(self):
+        r = []; self._ino(self.root, r); return r
+
+    def _ino(self, node, r):
+        if node: self._ino(node.left, r); r.append(node.produk); self._ino(node.right, r)
+
+# ──────────────────────────────────────────
+# GRAPH REKOMENDASI
+# ──────────────────────────────────────────
+class GraphRekomendasi:
+    def __init__(self): self.adj: Dict[str, List[Tuple[str,int]]] = {}
+
+    def add_copurchase(self, a, b):
+        for x, y in [(a,b),(b,a)]:
+            if x not in self.adj: self.adj[x] = []
+            for i,(nb,fr) in enumerate(self.adj[x]):
+                if nb == y: self.adj[x][i] = (y, fr+1); break
+            else: self.adj[x].append((y, 1))
+
+    def rekomendasikan(self, kode, max_hop=2):
+        if kode not in self.adj: return []
+        visited = {kode}; freq_map = {}
+        q = Queue(); q.enqueue((kode, 0))
+        while not q.is_empty():
+            curr, hop = q.dequeue()
+            if hop >= max_hop: continue
+            for nb, fr in self.adj.get(curr, []):
+                if nb not in visited:
+                    visited.add(nb)
+                    freq_map[nb] = freq_map.get(nb, 0) + fr
+                    q.enqueue((nb, hop+1))
+        return sorted(freq_map.items(), key=lambda x: -x[1])
+
+# ──────────────────────────────────────────
+# LINKED LIST ORDER (untuk Sorting)
+# ──────────────────────────────────────────
+class OrderLL:
+    def __init__(self): self.head = None; self._size = 0
+
+    def append(self, order):
+        node = LLNode(order)
+        if not self.head: self.head = node; self._size += 1; return
+        c = self.head
+        while c.next: c = c.next
+        c.next = node; self._size += 1
+
+    def to_list(self):
+        r, c = [], self.head
+        while c: r.append(c.data); c = c.next
+        return r
+
+    def __len__(self): return self._size
+
+    def bubble_sort_harga_desc(self):
+        t = time.perf_counter()
         swapped = True
         while swapped:
             swapped = False; c = self.head
             while c and c.next:
-                if c.data["total"] < c.next.data["total"]:
-                    c.data, c.next.data = c.next.data, c.data
-                    swapped = True
+                if c.data.total_harga < c.next.data.total_harga:
+                    c.data, c.next.data = c.next.data, c.data; swapped = True
                 c = c.next
-    def insertion_sort_waktu(self):
-        items = self.to_list()
-        for i in range(1, len(items)):
-            key = items[i]; j = i - 1
-            while j >= 0 and items[j]["waktu"] > key["waktu"]:
-                items[j + 1] = items[j]; j -= 1
-            items[j + 1] = key
-        self.from_list(items)
+        return (time.perf_counter() - t) * 1000
 
-
-# ======================================================================
-# WARNA TERMINAL
-# ======================================================================
-class C:
-    RESET  = "\033[0m"
-    BOLD   = "\033[1m"
-    RED    = "\033[91m"
-    GREEN  = "\033[92m"
-    YELLOW = "\033[93m"
-    BLUE   = "\033[94m"
-    CYAN   = "\033[96m"
-    WHITE  = "\033[97m"
-    ORANGE = "\033[38;5;208m"
-
-def ok(msg):   print(f"  {C.GREEN}✓{C.RESET} {msg}")
-def err(msg):  print(f"  {C.RED}✗{C.RESET} {msg}")
-def info(msg): print(f"  {C.CYAN}→{C.RESET} {msg}")
-def bigo(op, complexity):
-    print(f"  {C.YELLOW}Big-O {op}: {C.BOLD}{complexity}{C.RESET}")
-
-
-# ======================================================================
-# SISTEM UTAMA
-# ======================================================================
-
-class ECommerceSystem:
-    """Sistem CLI E-Commerce terintegrasi."""
-
-    NAMA_PRODUK = [
-        "Laptop Gaming", "Mouse Wireless", "Keyboard Mekanikal",
-        "Monitor 27\"", "Headset Bluetooth", "Webcam HD",
-        "SSD 1TB", "RAM 16GB", "GPU RTX", "Charger USB-C",
-        "Microphone USB", "Speaker Portable", "Tablet Android",
-        "Smartwatch", "Router WiFi 6", "Power Bank 20000mAh",
-        "Kamera Mirrorless", "Drone Mini", "VR Headset", "Game Controller",
-    ]
-
-    def __init__(self):
-        # Inisialisasi struktur data
-        self.katalog = BSTKatalogProduk() if BST_EXT   else _BST()
-        self.antrian = MultiPriorityQueue() if QUEUE_EXT else _Queue()
-        self.stack   = TransactionStackManager() if STACK_EXT else _StackMgr()
-        self.graph   = GraphRekomendasi() if GRAPH_EXT else _Graph()
-        self.ll      = LinkedListLaporan() if LL_EXT else _LL()
-
-        self._order_counter = 0
-        self._seed_data()
-
-    def _seed_data(self):
-        """Seed 100 produk (P001–P100) dan graph rekomendasi."""
-        random.seed(99)
-
-        # Seed produk ke BST
-        for i in range(1, 101):
-            kode  = f"P{i:03d}"
-            nama  = self.NAMA_PRODUK[i % len(self.NAMA_PRODUK)]
-            harga = random.randint(50_000, 15_000_000)
-            stok  = random.randint(5, 100)
-            self.katalog.insert(kode, nama, harga, stok)
-
-        # Seed graph co-purchase (edge acak antar produk)
-        produk_list = [f"P{i:03d}" for i in range(1, 101)]
-        for _ in range(200):
-            u = random.choice(produk_list)
-            v = random.choice(produk_list)
-            if u != v:
-                w = random.randint(1, 10)
-                self.graph.add_edge(u, v, w)
-
-    def _new_order_id(self, cust: str) -> str:
-        self._order_counter += 1
-        ts = datetime.now().strftime("%H%M%S")
-        return f"ORD-{cust}-{ts}-{self._order_counter:04d}"
-
-
-# ======================================================================
-# HANDLER SETIAP PERINTAH
-# ======================================================================
-
-    # ── ORDER <cust> <prod> <tier> ────────────────────────────────────
-    def cmd_order(self, args: list):
-        if len(args) < 3:
-            err("Format: ORDER <cust> <prod> <tier>")
-            err("Contoh: ORDER C001 P010 PREMIUM")
-            return
-
-        cust, prod, tier = args[0].upper(), args[1].upper(), args[2].upper()
-
-        if tier not in ["PREMIUM", "REGULAR", "ECONOMY"]:
-            err(f"Tier tidak valid: {tier}. Pilih PREMIUM / REGULAR / ECONOMY")
-            return
-
-        # Cek produk ada di katalog
-        node = self.katalog.search(prod)
-        if not node:
-            err(f"Produk {prod} tidak ditemukan di katalog.")
-            return
-        if node.stok <= 0:
-            err(f"Stok {prod} habis!")
-            return
-
-        # Masukkan ke antrian
-        item = self.antrian.enqueue(cust, prod, tier)
-
-        # Simpan ke stack riwayat
-        oid = self._new_order_id(cust)
-        if STACK_EXT:
-            rec = OrderRecord(oid, prod, 1, tier, node.harga)
-            self.stack._get_or_create(cust).push(rec)
-        else:
-            self.stack.push(cust, {
-                "id": oid, "prod": prod, "tier": tier,
-                "harga": node.harga, "total": node.harga,
-                "waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "AKTIF"
-            })
-
-        # Simpan ke linked list laporan
-        self.ll.append({
-            "id": oid, "cust": cust, "prod": prod, "tier": tier,
-            "total": node.harga,
-            "waktu": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
-
-        ok(f"Order masuk antrian [{tier}] — {cust} | {prod} | {node.nama}")
-        info(f"Harga satuan: Rp{node.harga:,.0f}")
-        bigo("enqueue", "O(1)")
-
-    # ── SERVE ─────────────────────────────────────────────────────────
-    def cmd_serve(self, args: list):
-        item = self.antrian.dequeue()
-        if not item:
-            err("Antrian kosong. Tidak ada order yang bisa dilayani.")
-            return
-
-        # Kurangi stok
-        if isinstance(item, dict):
-            cust, prod, tier = item["cust"], item["prod"], item["tier"]
-        else:
-            cust = getattr(item, "cust", str(item))
-            prod = getattr(item, "prod", "?")
-            tier = getattr(item, "tier", "?")
-
-        self.katalog.update_stok(prod, -1)
-
-        print(f"\n  {C.ORANGE}{'▶ MELAYANI ORDER ':─<45}{C.RESET}")
-        ok(f"Pelanggan : {cust}")
-        ok(f"Produk    : {prod}")
-        ok(f"Tier      : {tier}")
-        node = self.katalog.search(prod)
-        if node:
-            ok(f"Stok sisa : {node.stok}")
-        bigo("serve (dequeue)", "O(1)")
-
-    # ── CANCEL_LAST ───────────────────────────────────────────────────
-    def cmd_cancel_last(self, args: list):
-        item = self.antrian.cancel_last()
-        if not item:
-            err("Antrian kosong. Tidak ada yang bisa dibatalkan.")
-            return
-        if isinstance(item, dict):
-            cust, prod, tier = item.get("cust","?"), item.get("prod","?"), item.get("tier","?")
-        else:
-            cust = getattr(item, "cust", "?")
-            prod = getattr(item, "prod", "?")
-            tier = getattr(item, "tier", "?")
-
-        ok(f"Order terakhir dibatalkan dari antrian: {cust} | {prod} | {tier}")
-        bigo("CANCEL_LAST (Stack pop)", "O(1)")
-
-    # ── CARI_PRODUK <kode> ────────────────────────────────────────────
-    def cmd_cari_produk(self, args: list):
-        if not args:
-            err("Format: CARI_PRODUK <kode>   Contoh: CARI_PRODUK P010")
-            return
-        kode = args[0].upper()
-        node = self.katalog.search(kode)
-        if not node:
-            err(f"Produk {kode} tidak ditemukan.")
-        else:
-            print(f"\n  {C.BLUE}{'─'*45}{C.RESET}")
-            ok(f"Kode  : {node.kode}")
-            ok(f"Nama  : {node.nama}")
-            ok(f"Harga : Rp{node.harga:,.0f}")
-            ok(f"Stok  : {node.stok}")
-            print(f"  {C.BLUE}{'─'*45}{C.RESET}")
-        bigo("CARI_PRODUK (BST search)", "O(log n)")
-
-    # ── UPDATE_STOK <kode> <qty> ──────────────────────────────────────
-    def cmd_update_stok(self, args: list):
-        if len(args) < 2:
-            err("Format: UPDATE_STOK <kode> <qty>   Contoh: UPDATE_STOK P010 +20")
-            return
-        kode = args[0].upper()
-        try:
-            delta = int(args[1])
-        except ValueError:
-            err("qty harus berupa angka. Contoh: +20 atau -5")
-            return
-
-        sukses = self.katalog.update_stok(kode, delta)
-        if sukses:
-            node = self.katalog.search(kode)
-            ok(f"Stok {kode} diperbarui → {node.stok} unit")
-        else:
-            err(f"Gagal update stok {kode}.")
-        bigo("UPDATE_STOK (BST search+update)", "O(log n)")
-
-    # ── REKOMENDASI <kode_produk> ─────────────────────────────────────
-    def cmd_rekomendasi(self, args: list):
-        if not args:
-            err("Format: REKOMENDASI <kode_produk>   Contoh: REKOMENDASI P010")
-            return
-        kode    = args[0].upper()
-        results = self.graph.bfs_recommend(kode, max_hop=2)
-
-        if not results:
-            err(f"Tidak ada rekomendasi untuk {kode}. (Belum ada data co-purchase)")
-            bigo("REKOMENDASI (BFS)", "O(V+E)")
-            return
-
-        print(f"\n  {C.CYAN}Rekomendasi untuk {kode} (BFS, hop ≤ 2):{C.RESET}")
-        print(f"  {'─'*50}")
-        for i, (prod, freq, hop) in enumerate(results[:5], 1):
-            node = self.katalog.search(prod)
-            nama = node.nama if node else "?"
-            ok(f"{i}. {prod} | {nama} | freq={freq} | hop={hop}")
-        bigo("REKOMENDASI (BFS)", "O(V+E)")
-
-    # ── RIWAYAT <cust> ────────────────────────────────────────────────
-    def cmd_riwayat(self, args: list):
-        if not args:
-            err("Format: RIWAYAT <cust>   Contoh: RIWAYAT C001")
-            return
-        cust = args[0].upper()
-
-        if STACK_EXT:
-            self.stack.tampilkan_riwayat(cust)
-        else:
-            orders = self.stack.riwayat(cust)
-            print(f"\n  {'='*55}")
-            print(f"  {'RIWAYAT TRANSAKSI — ' + cust:^55}")
-            print(f"  {'='*55}")
-            if not orders:
-                print("  (Belum ada transaksi)")
+    def insertion_sort_waktu_asc(self):
+        t = time.perf_counter()
+        sorted_head = None; curr = self.head
+        while curr:
+            nxt = curr.next
+            if not sorted_head or curr.data.waktu_pesan < sorted_head.data.waktu_pesan:
+                curr.next = sorted_head; sorted_head = curr
             else:
-                for i, o in enumerate(orders, 1):
-                    print(f"  {i:>2}. {o.get('waktu','?')} | {o.get('id','?')} | "
-                          f"{o.get('prod','?')} | {o.get('tier','?')} | "
-                          f"Rp{o.get('total',0):,.0f}")
-            print(f"  {'='*55}")
-        bigo("RIWAYAT (Stack traversal)", "O(n)")
+                tmp = sorted_head
+                while tmp.next and tmp.next.data.waktu_pesan <= curr.data.waktu_pesan:
+                    tmp = tmp.next
+                curr.next = tmp.next; tmp.next = curr
+            curr = nxt
+        self.head = sorted_head
+        return (time.perf_counter() - t) * 1000
 
-    # ── LAPORAN_HARIAN ────────────────────────────────────────────────
-    def cmd_laporan_harian(self, args: list):
-        import time
+# ──────────────────────────────────────────
+# GENERATE DATA
+# ──────────────────────────────────────────
+def generate_produk(n=100):
+    tmpl = ['Laptop','Mouse','Keyboard','Monitor','Headset',
+            'Webcam','USB Hub','Charger','Kabel HDMI','Speaker']
+    return [Produk(f'P{i:03d}', f'{random.choice(tmpl)} Model-{i}',
+                   round(random.uniform(50_000,5_000_000),-3),
+                   random.randint(0,200)) for i in range(1,n+1)]
 
-        items = self.ll.to_list()
-        if not items:
-            err("Belum ada order yang diproses hari ini.")
-            return
+def generate_orders(produk_list, n=300):
+    custs = [f'C{i:03d}' for i in range(1,51)]
+    tiers = ['PREMIUM','REGULAR','REGULAR','ECONOMY']
+    hasil = []
+    for i in range(1,n+1):
+        p = random.choice(produk_list)
+        t = random.choice(tiers)
+        q = random.randint(1,5)
+        hasil.append(Order(i, random.choice(custs), p.kode, t,
+                           q, p.harga*q, time.time()+i*0.01))
+    return hasil
 
-        # (a) Bubble Sort by total_harga descending
-        ll_bubble = _LL()
-        for item in items: ll_bubble.append(item)
-        t0 = time.perf_counter()
-        ll_bubble.bubble_sort_harga()
-        t_bubble = (time.perf_counter() - t0) * 1000
+def build_graph(orders, graf):
+    dari_cust: Dict[str, List[str]] = {}
+    for o in orders:
+        dari_cust.setdefault(o.pelanggan,[]).append(o.produk_kode)
+    for prods in dari_cust.values():
+        uniq = list(dict.fromkeys(prods))
+        for i in range(len(uniq)):
+            for j in range(i+1, min(i+4, len(uniq))):
+                graf.add_copurchase(uniq[i], uniq[j])
 
-        # (b) Insertion Sort by waktu_pesan ascending
-        ll_insert = _LL()
-        for item in items: ll_insert.append(item)
-        t0 = time.perf_counter()
-        ll_insert.insertion_sort_waktu()
-        t_insert = (time.perf_counter() - t0) * 1000
+# ──────────────────────────────────────────
+# MAIN
+# ──────────────────────────────────────────
+def main():
+    # ── Init ──
+    queues = {'PREMIUM': Queue(), 'REGULAR': Queue(), 'ECONOMY': Queue()}
+    cust_stacks: Dict[str, Stack] = {}
+    cancel_stack = Stack(kapasitas=50)
+    bst = BSTKatalog()
+    graf = GraphRekomendasi()
+    order_ll = OrderLL()
+    counter = 0
 
-        n = len(items)
+    produk_list = generate_produk(100)
+    for p in produk_list: bst.insert(p)
 
-        print(f"\n  {C.ORANGE}{'═'*55}{C.RESET}")
-        print(f"  {C.BOLD}{'LAPORAN HARIAN E-COMMERCE':^55}{C.RESET}")
-        print(f"  {C.ORANGE}{'═'*55}{C.RESET}")
-        print(f"  Total order hari ini: {n}")
-        print()
-
-        # Tampilkan top 5 by harga
-        sorted_harga = ll_bubble.to_list()
-        print(f"  {C.CYAN}Top 5 Order by Total Harga (Descending):{C.RESET}")
-        print(f"  {'─'*55}")
-        for i, o in enumerate(sorted_harga[:5], 1):
-            print(f"  {i}. {o.get('id','?')[:20]:<22} "
-                  f"{o.get('cust','?'):<6} "
-                  f"Rp{o.get('total',0):>12,.0f}")
-
-        print()
-
-        # Tampilkan top 5 by waktu
-        sorted_waktu = ll_insert.to_list()
-        print(f"  {C.CYAN}Top 5 Order by Waktu Pesan (Ascending):{C.RESET}")
-        print(f"  {'─'*55}")
-        for i, o in enumerate(sorted_waktu[:5], 1):
-            print(f"  {i}. {o.get('waktu','?')} | "
-                  f"{o.get('cust','?')} | "
-                  f"{o.get('prod','?')} | "
-                  f"{o.get('tier','?')}")
-
-        print()
-        print(f"  {C.YELLOW}Runtime Sorting (N={n}):{C.RESET}")
-        print(f"  Bubble Sort    (by harga)  : {t_bubble:.4f} ms")
-        print(f"  Insertion Sort (by waktu)  : {t_insert:.4f} ms")
-        faster = "Insertion Sort" if t_insert < t_bubble else "Bubble Sort"
-        print(f"  → {C.GREEN}{faster} lebih cepat{C.RESET}")
-        print(f"  {C.ORANGE}{'═'*55}{C.RESET}")
-        bigo("LAPORAN_HARIAN (sorting)", "O(n²)")
-
-
-# ======================================================================
-# CLI LOOP
-# ======================================================================
-
-BANNER = f"""
-{C.ORANGE}╔══════════════════════════════════════════════════════╗
-║     E-COMMERCE ORDER MANAGEMENT & RECOMMENDATION    ║
-║              TOPIK 3 — CLI TERINTEGRASI             ║
-╚══════════════════════════════════════════════════════╝{C.RESET}
-{C.CYAN}Perintah:{C.RESET}
-  ORDER <cust> <prod> <tier>    → tambah order         O(1)
-  SERVE                          → layani order          O(1)
-  CANCEL_LAST                    → batalkan order terakhir O(1)
-  CARI_PRODUK <kode>             → cari produk BST       O(log n)
-  UPDATE_STOK <kode> <qty>       → update stok           O(log n)
-  REKOMENDASI <kode>             → rekomendasi BFS       O(V+E)
-  RIWAYAT <cust>                 → riwayat transaksi     O(n)
-  LAPORAN_HARIAN                 → laporan + sorting     O(n²)
-  KELUAR                         → keluar
-{C.YELLOW}Contoh:{C.RESET}
-  ORDER C001 P010 PREMIUM
-  CARI_PRODUK P050
-  REKOMENDASI P010
-"""
-
-COMMANDS = {
-    "ORDER":         "cmd_order",
-    "SERVE":         "cmd_serve",
-    "CANCEL_LAST":   "cmd_cancel_last",
-    "CARI_PRODUK":   "cmd_cari_produk",
-    "UPDATE_STOK":   "cmd_update_stok",
-    "REKOMENDASI":   "cmd_rekomendasi",
-    "RIWAYAT":       "cmd_riwayat",
-    "LAPORAN_HARIAN":"cmd_laporan_harian",
-}
-
-
-def run_cli():
-    print(BANNER)
-    system = ECommerceSystem()
-    ok("Sistem diinisialisasi. 100 produk dimuat ke BST. Graph rekomendasi siap.")
-    print()
+    print("=" * 58)
+    print("   E-COMMERCE ORDER MANAGEMENT & RECOMMENDATION ENGINE")
+    print("   ELT60213 | Kelompok 4 | TA 2025/2026")
+    print("=" * 58)
+    print(f"  100 produk dimuat ke BST Katalog.")
+    print("  Ketik BANTUAN untuk daftar perintah.\n")
 
     while True:
         try:
-            raw = input(f"{C.BOLD}{C.WHITE}ecommerce>{C.RESET} ").strip()
+            raw = input("> ").strip()
         except (EOFError, KeyboardInterrupt):
-            print(f"\n{C.YELLOW}Sampai jumpa!{C.RESET}")
-            break
-
-        if not raw:
-            continue
-
+            print("\nKeluar. Sampai jumpa!"); break
+        if not raw: continue
         parts = raw.upper().split()
-        cmd   = parts[0]
-        args  = parts[1:]   # sisa argumen (sudah uppercase)
+        cmd = parts[0]
 
-        if cmd == "KELUAR":
-            print(f"\n{C.YELLOW}Terima kasih telah menggunakan sistem. Sampai jumpa!{C.RESET}\n")
-            break
+        # ── ORDER ──
+        if cmd == 'ORDER':
+            if len(parts) < 4:
+                print("  [!] Format: ORDER <cust> <prod> <tier>"); continue
+            cust, kode, tier = parts[1], parts[2], parts[3]
+            if tier not in queues:
+                print("  [!] Tier: PREMIUM | REGULAR | ECONOMY"); continue
+            p = bst.search(kode)
+            if not p: print(f"  [!] Produk {kode} tidak ditemukan."); continue
+            if p.stok <= 0: print(f"  [!] Stok {kode} habis!"); continue
+            counter += 1
+            total = p.harga * 1
+            order = Order(counter, cust, kode, tier, 1, total, time.time())
+            queues[tier].enqueue(order)
+            cancel_stack.push(order)
+            bst.update_stok(kode, -1)
+            print(f"  [OK] Order #{counter}: {cust} beli {kode} [{tier}]"
+                  f" Rp{total:,.0f}  | enqueue O(1)")
 
-        if cmd in COMMANDS:
-            print()
-            try:
-                getattr(system, COMMANDS[cmd])(args)
-            except Exception as exc:
-                err(f"Error: {exc}")
-            print()
+        # ── SERVE ──
+        elif cmd == 'SERVE':
+            served = None
+            for tier in ['PREMIUM','REGULAR','ECONOMY']:
+                if not queues[tier].is_empty():
+                    served = queues[tier].dequeue(); served_tier = tier; break
+            if not served:
+                print("  [!] Semua antrian kosong.")
+            else:
+                cust = served.pelanggan
+                if cust not in cust_stacks: cust_stacks[cust] = Stack(10)
+                cust_stacks[cust].push(served)
+                order_ll.append(served)
+                print(f"  [OK] Melayani Order #{served.order_id} | {served.pelanggan}"
+                      f" - {served.produk_kode} [{served_tier}] Rp{served.total_harga:,.0f}")
+                print(f"       Kompleksitas SERVE: O(1)")
+
+        # ── CANCEL_LAST ──
+        elif cmd == 'CANCEL_LAST':
+            last = cancel_stack.pop()
+            if not last: print("  [!] Tidak ada order untuk dibatalkan."); continue
+            items = queues[last.tier].to_list()
+            new = [o for o in items if o.order_id != last.order_id]
+            if len(new) < len(items):
+                queues[last.tier] = Queue()
+                for o in new: queues[last.tier].enqueue(o)
+                bst.update_stok(last.produk_kode, last.qty)
+                print(f"  [OK] Order #{last.order_id} ({last.produk_kode}) dibatalkan."
+                      f" Stok dikembalikan.  | Stack pop O(1)")
+            else:
+                print(f"  [!] Order #{last.order_id} sudah dilayani, tidak bisa dibatalkan.")
+
+        # ── LAPORAN_ANTRIAN ──
+        elif cmd == 'LAPORAN_ANTRIAN':
+            print("\n  ── LAPORAN ANTRIAN ──────────────────────────")
+            total = 0
+            for tier in ['PREMIUM','REGULAR','ECONOMY']:
+                items = queues[tier].to_list()
+                n = len(items)
+                total += n
+                head_info = f"HEAD: Order#{items[0].order_id} ({items[0].pelanggan})" if items else "Kosong"
+                print(f"  {tier:<10}: {n:>3} order  |  {head_info}")
+            print(f"  {'─'*42}")
+            print(f"  Total: {total} order\n")
+
+        # ── CARI_PRODUK ──
+        elif cmd == 'CARI_PRODUK':
+            if len(parts) < 2: print("  [!] Format: CARI_PRODUK <kode>"); continue
+            p = bst.search(parts[1])
+            if not p: print(f"  [!] Produk {parts[1]} tidak ditemukan.")
+            else:
+                print(f"\n  ── Detail Produk ──────────────────────────")
+                print(f"  Kode  : {p.kode}")
+                print(f"  Nama  : {p.nama}")
+                print(f"  Harga : Rp{p.harga:,.0f}")
+                print(f"  Stok  : {p.stok} unit")
+                print(f"  Kompleksitas: O(log n) = O(log 100) ≈ 7 langkah\n")
+
+        # ── UPDATE_STOK ──
+        elif cmd == 'UPDATE_STOK':
+            if len(parts) < 3: print("  [!] Format: UPDATE_STOK <kode> <qty>"); continue
+            try: qty = int(parts[2])
+            except: print("  [!] qty harus angka."); continue
+            if bst.update_stok(parts[1], qty):
+                p = bst.search(parts[1])
+                print(f"  [OK] Stok {parts[1]} diperbarui. Stok baru: {p.stok} unit  | O(log n)")
+            else: print(f"  [!] Produk {parts[1]} tidak ditemukan.")
+
+        # ── KATALOG ──
+        elif cmd == 'KATALOG':
+            n_show = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 10
+            items = bst.inorder()[:n_show]
+            print(f"\n  ── BST Katalog Inorder ({n_show} pertama) ─────────────")
+            print(f"  {'Kode':<8} {'Nama':<30} {'Harga':>12} {'Stok':>6}")
+            print(f"  {'─'*7} {'─'*29} {'─'*12} {'─'*6}")
+            for p in items:
+                print(f"  {p.kode:<8} {p.nama:<30} Rp{p.harga:>10,.0f} {p.stok:>5}")
+            print(f"  Kompleksitas: O(n)\n")
+
+        # ── REKOMENDASI ──
+        elif cmd == 'REKOMENDASI':
+            if len(parts) < 2: print("  [!] Format: REKOMENDASI <kode>"); continue
+            rek = graf.rekomendasikan(parts[1])
+            if not rek:
+                print(f"  [!] Belum ada co-purchase untuk {parts[1]}. Jalankan DEMO_SIMULASI dulu.")
+            else:
+                print(f"\n  ── Rekomendasi untuk {parts[1]} (BFS <= 2 hop) ───────")
+                print(f"  {'Produk':<10} {'Frekuensi':>10}  Nama")
+                print(f"  {'─'*9} {'─'*10}  {'─'*25}")
+                for kd, fr in rek[:8]:
+                    p = bst.search(kd)
+                    nama = p.nama if p else "?"
+                    print(f"  {kd:<10} {fr:>8}x  {nama}")
+                print(f"  Kompleksitas BFS: O(V + E)\n")
+
+        # ── RIWAYAT ──
+        elif cmd == 'RIWAYAT':
+            if len(parts) < 2: print("  [!] Format: RIWAYAT <cust>"); continue
+            cust = parts[1]
+            if cust not in cust_stacks or cust_stacks[cust].is_empty():
+                print(f"  [!] Belum ada riwayat untuk {cust}.")
+            else:
+                items = cust_stacks[cust].to_list()
+                print(f"\n  ── Riwayat {cust} (Stack, terbaru di atas) ───────")
+                for i, o in enumerate(items, 1):
+                    print(f"  [{i:2d}] Order#{o.order_id:<5} {o.produk_kode}  {o.tier:<10}"
+                          f"  Rp{o.total_harga:>10,.0f}")
+                print(f"  Kompleksitas: O(n)\n")
+
+        # ── UNDO_ORDER ──
+        elif cmd == 'UNDO_ORDER':
+            if len(parts) < 2: print("  [!] Format: UNDO_ORDER <cust>"); continue
+            cust = parts[1]
+            if cust not in cust_stacks or cust_stacks[cust].is_empty():
+                print(f"  [!] Tidak ada riwayat untuk {cust}.")
+            else:
+                last = cust_stacks[cust].pop()
+                bst.update_stok(last.produk_kode, last.qty)
+                print(f"  [OK] UNDO: Order #{last.order_id} ({last.produk_kode}) dihapus dari riwayat.")
+                print(f"       Stok {last.produk_kode} dikembalikan +{last.qty}  | pop O(1)")
+
+        # ── LAPORAN_HARIAN ──
+        elif cmd == 'LAPORAN_HARIAN':
+            if len(order_ll) == 0:
+                print("  [!] Belum ada order selesai. Gunakan SERVE atau DEMO_SIMULASI."); continue
+            all_orders = order_ll.to_list()
+            n = len(all_orders)
+            print(f"\n  ══════════════════════════════════════════════")
+            print(f"  LAPORAN HARIAN — {n} order selesai")
+            print(f"  ══════════════════════════════════════════════")
+
+            ll_b = OrderLL()
+            ll_i = OrderLL()
+            for o in all_orders: ll_b.append(o); ll_i.append(o)
+            tb = ll_b.bubble_sort_harga_desc()
+            ti = ll_i.insertion_sort_waktu_asc()
+
+            print(f"\n  Bubble Sort   (harga DESC) : {tb:.3f} ms")
+            print(f"  Insertion Sort (waktu ASC) : {ti:.3f} ms")
+            print(f"  Rasio Bubble/Insertion     : {tb/ti:.1f}x lebih lambat\n")
+
+            # Benchmark 3 ukuran
+            sim = generate_orders(produk_list, 300)
+            print(f"  {'N':>6}  {'Bubble Sort':>13}  {'Insertion Sort':>15}")
+            print(f"  {'─'*6}  {'─'*13}  {'─'*15}")
+            for size in [50, 100, 300]:
+                sub = sim[:size]
+                lb = OrderLL(); li = OrderLL()
+                for o in sub: lb.append(o); li.append(o)
+                print(f"  {size:>6}  {lb.bubble_sort_harga_desc():>11.3f} ms"
+                      f"  {li.insertion_sort_waktu_asc():>13.3f} ms")
+            print(f"\n  Kompleksitas: O(n²)  — Insertion Sort lebih baik untuk data hampir terurut")
+
+            print(f"\n  Top-5 Order (harga tertinggi setelah Bubble Sort):")
+            for i, o in enumerate(ll_b.to_list()[:5], 1):
+                print(f"  {i}. Order#{o.order_id:<5} {o.pelanggan} {o.produk_kode}"
+                      f" [{o.tier}]  Rp{o.total_harga:,.0f}")
+            print(f"  ══════════════════════════════════════════════\n")
+
+        # ── DEMO_SIMULASI ──
+        elif cmd == 'DEMO_SIMULASI':
+            print("  Menjalankan 300 order simulasi (seed=99)...")
+            sim = generate_orders(produk_list, 300)
+            for o in sim: queues[o.tier].enqueue(o); cancel_stack.push(o)
+            count = 0
+            for tier in ['PREMIUM','REGULAR','ECONOMY']:
+                while not queues[tier].is_empty():
+                    sv = queues[tier].dequeue()
+                    cust = sv.pelanggan
+                    if cust not in cust_stacks: cust_stacks[cust] = Stack(10)
+                    cust_stacks[cust].push(sv)
+                    order_ll.append(sv)
+                    count += 1
+            build_graph(sim, graf)
+            counter += 300
+            print(f"  [OK] {count} order dilayani. Graf co-purchase dibangun.")
+            print(f"  Coba: RIWAYAT C001 | REKOMENDASI P015 | LAPORAN_HARIAN\n")
+
+        # ── BANTUAN ──
+        elif cmd == 'BANTUAN':
+            print("""
+  ── PERINTAH TERSEDIA ──────────────────────────────────
+  ORDER <cust> <prod> <tier>   Buat order baru
+  SERVE                        Layani order prioritas
+  CANCEL_LAST                  Batalkan order terakhir
+  LAPORAN_ANTRIAN              Status semua antrian
+  CARI_PRODUK <kode>           Cari produk (BST)
+  UPDATE_STOK <kode> <qty>     Update stok produk
+  KATALOG [n]                  Tampilkan katalog (inorder)
+  REKOMENDASI <kode>           Rekomendasi co-purchase
+  RIWAYAT <cust>               Riwayat transaksi (Stack)
+  UNDO_ORDER <cust>            Batalkan transaksi terakhir
+  LAPORAN_HARIAN               Sorting & laporan harian
+  DEMO_SIMULASI                Jalankan 300 order simulasi
+  KELUAR                       Keluar dari sistem
+  ──────────────────────────────────────────────────────""")
+
+        elif cmd == 'KELUAR':
+            print("\n  Terima kasih! Sistem ditutup.\n"); break
         else:
-            err(f"Perintah tidak dikenal: {cmd}")
-            info("Ketik KELUAR untuk keluar, atau lihat daftar perintah di atas.")
+            print(f"  [!] Perintah tidak dikenal. Ketik BANTUAN.")
 
-
-if __name__ == "__main__":
-    run_cli()
+if __name__ == '__main__':
+    main()
