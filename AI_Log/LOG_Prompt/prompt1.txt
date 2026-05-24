@@ -1,3 +1,4 @@
+feat/reino-bst
 ============================================================
 LOG PROMPT - IMPLEMENTASI BST KATALOG PRODUK
 ============================================================
@@ -55,3 +56,62 @@ ANALISIS EFISIENSI ALGORITMA (BIG-O)
 - Search (Pencarian): Rata-rata O(log n)
 - Insert (Penambahan): Rata-rata O(log n)
 ============================================================
+=======
+============================================================
+LOG PROMPT - IMPLEMENTASI BST KATALOG PRODUK
+============================================================
+
+[PROMPT USER]
+Tolong buatkan implementasi struktur data Binary Search Tree (BST) menggunakan Python. Kode ini akan digunakan untuk fitur 'Katalog Produk' pada sistem e-commerce, di mana kita bisa menambahkan produk (insert) dan mencari produk (search) berdasarkan ID Produk.
+
+------------------------------------------------------------
+
+[JAWABAN AI]
+Berikut adalah implementasi Python untuk struktur data Binary Search Tree (BST) Katalog Produk:
+
+class NodeProduk:
+    def __init__(self, product_id, product_name, price):
+        self.product_id = product_id
+        self.product_name = product_name
+        self.price = price
+        self.left = None
+        self.right = None
+
+class BSTKatalogProduk:
+    def __init__(self):
+        self.root = None
+
+    def insert(self, product_id, product_name, price):
+        if self.root is None:
+            self.root = NodeProduk(product_id, product_name, price)
+        else:
+            self._insert_recursive(self.root, product_id, product_name, price)
+
+    def _insert_recursive(self, node, product_id, product_name, price):
+        if product_id < node.product_id:
+            if node.left is None:
+                node.left = NodeProduk(product_id, product_name, price)
+            else:
+                self._insert_recursive(node.left, product_id, product_name, price)
+        elif product_id > node.product_id:
+            if node.right is None:
+                node.right = NodeProduk(product_id, product_name, price)
+            else:
+                self._insert_recursive(node.right, product_id, product_name, price)
+
+    def search(self, product_id):
+        return self._search_recursive(self.root, product_id)
+
+    def _search_recursive(self, node, product_id):
+        if node is None or node.product_id == product_id:
+            return node
+        if node.product_id < product_id:
+            return self._search_recursive(node.right, product_id)
+        return self._search_recursive(node.left, product_id)
+
+------------------------------------------------------------
+ANALISIS EFISIENSI ALGORITMA (BIG-O)
+- Search (Pencarian): Rata-rata O(log n)
+- Insert (Penambahan): Rata-rata O(log n)
+============================================================
+main
